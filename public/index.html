@@ -335,6 +335,7 @@ function buildSidebar() {
     links = [
       { id: 'admin-dashboard', icon: 'fa-tachometer-alt',   label: 'Дашборд' },
       { id: 'all-requests',    icon: 'fa-list-alt',          label: 'Все заявки' },
+      { id: 'activity',        icon: 'fa-stream',            label: 'Центр активности' },
       { id: 'admin-users',     icon: 'fa-users',             label: 'Пользователи' },
       { id: 'notifications',   icon: 'fa-bell',              label: 'Уведомления' },
       { id: 'profile',         icon: 'fa-user-circle',       label: 'Мой профиль' },
@@ -343,6 +344,7 @@ function buildSidebar() {
     links = [
       { id: 'dashboard',       icon: 'fa-chart-bar',         label: 'Дашборд' },
       { id: 'all-requests',    icon: 'fa-list-alt',          label: 'Все заявки' },
+      { id: 'activity',        icon: 'fa-stream',            label: 'Центр активности' },
       { id: 'notifications',   icon: 'fa-bell',              label: 'Уведомления' },
       { id: 'profile',         icon: 'fa-user-circle',       label: 'Мой профиль' },
     ]
@@ -379,6 +381,7 @@ function navigateTo(page) {
     'notifications':   ['Уведомления', 'Системные уведомления'],
     'admin-users':     ['Пользователи', 'Управление пользователями'],
     'profile':         ['Мой профиль', 'Редактирование профиля'],
+    'activity':        ['Центр активности', 'Все действия в системе'],
   }
   const [title, subtitle] = titles[page] || [page, '']
   document.getElementById('page-title').textContent = title
@@ -393,6 +396,7 @@ function navigateTo(page) {
     'notifications':   renderNotificationsPage,
     'admin-users':     renderAdminUsers,
     'profile':         renderProfile,
+    'activity':        renderActivity,
   }
   if (pages[page]) pages[page]()
 }
@@ -702,6 +706,9 @@ async function renderAllRequests() {
           </button>
           <button onclick="loadRequests()" class="ml-auto px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700 transition">
             <i class="fas fa-sync-alt mr-1"></i>Обновить
+          </button>
+          <button onclick="exportToExcel()" class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700 transition flex items-center gap-1">
+            <i class="fas fa-file-excel mr-1"></i>Экспорт в Excel
           </button>
         </div>
       </div>
@@ -2063,7 +2070,266 @@ async function deleteUser(id, name) {
   } catch(e) { showToast(e.response?.data?.error || 'Ошибка удаления', 'error') }
 }
 
+// ===== EXPORT TO EXCEL =====
+async function exportToExcel() {
+  try {
+    const params = new URLSearchParams()
+    if (reqFilters.status && reqFilters.status !== 'all') params.set('status', reqFilters.status)
+    if (reqFilters.priority && reqFilters.priority !== 'all') params.set('priority', reqFilters.priority)
+    if (reqFilters.project_id && reqFilters.project_id !== 'all') params.set('project_id', reqFilters.project_id)
+    if (reqFilters.applicant_id) params.set('applicant_id', reqFilters.applicant_id)
+    if (reqFilters.date_from) params.set('date_from', reqFilters.date_from)
+    if (reqFilters.date_to) params.set('date_to', reqFilters.date_to)
+
+    const url = `/api/requests/export/csv?${params.toString()}`
+    const response = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } })
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ error: 'Ошибка экспорта' }))
+      showToast(err.error || 'Ошибка экспорта', 'error')
+      return
+    }
+
+    const blob = await response.blob()
+    const link = document.createElement('a')
+    link.href = URL.createObjectURL(blob)
+    const dateStr = new Date().toISOString().slice(0,10)
+    link.download = `tenoil-requests-${dateStr}.csv`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(link.href)
+    showToast('Файл скачан!', 'success')
+  } catch(e) {
+    showToast('Ошибка экспорта', 'error')
+  }
+}
+
+// ===== ACTIVITY CENTER =====
+let activityFilters = { action: 'all', user_id: '', date_from: '', date_to: '' }
+let activityOffset = 0
+const activityLimit = 30
+let allUsers = []
+
+async function renderActivity() {
+  const content = document.getElementById('main-content')
+  content.innerHTML = '<div class="flex items-center justify-center h-40"><i class="fas fa-spinner fa-spin text-blue-500 text-3xl"></i></div>'
+
+  try {
+    // Load users for filter (admin only)
+    if (currentUser.role === 'admin' && !allUsers.length) {
+      try {
+        const res = await api.get('/users')
+        allUsers = res.data.users || []
+      } catch(e) { allUsers = [] }
+    }
+
+    const [statsRes] = await Promise.all([
+      api.get('/activity/stats')
+    ])
+    const stats = statsRes.data
+
+    const userOptions = currentUser.role === 'admin' ? `
+      <select id="act-user-filter" onchange="activityFilters.user_id=this.value; activityOffset=0; loadActivity()"
+        class="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <option value="">Все пользователи</option>
+        ${allUsers.map(u => `<option value="${u.id}">${escHtml(u.full_name)} (${u.role})</option>`).join('')}
+      </select>
+    ` : ''
+
+    content.innerHTML = `
+      <div class="fade-in space-y-4">
+        <!-- Stats -->
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          ${statCard('Всего событий', stats.total, 'fa-stream', 'blue')}
+          ${statCard('Создано заявок', stats.created, 'fa-plus-circle', 'green')}
+          ${statCard('Изменений статуса', stats.status_changed, 'fa-exchange-alt', 'yellow')}
+          ${statCard('Файлов загружено', stats.file_added, 'fa-paperclip', 'purple')}
+        </div>
+
+        <!-- Top Users -->
+        ${stats.top_users && stats.top_users.length ? `
+        <div class="bg-white rounded-xl border border-gray-200 p-5">
+          <h3 class="font-semibold text-gray-700 mb-3"><i class="fas fa-star mr-2 text-yellow-500"></i>Наиболее активные пользователи</h3>
+          <div class="flex flex-wrap gap-2">
+            ${stats.top_users.map((u, i) => `
+              <span class="inline-flex items-center gap-2 px-3 py-1.5 bg-gray-100 rounded-full text-sm">
+                <span class="font-bold text-blue-600">#${i+1}</span>
+                <span>${escHtml(u.full_name)}</span>
+                <span class="text-gray-500">${u.actions} действий</span>
+              </span>
+            `).join('')}
+          </div>
+        </div>` : ''}
+
+        <!-- Filters -->
+        <div class="bg-white rounded-xl border border-gray-200 p-4">
+          <div class="flex flex-wrap gap-3 items-center">
+            <select id="act-action-filter" onchange="activityFilters.action=this.value; activityOffset=0; loadActivity()"
+              class="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="all">Все действия</option>
+              <option value="created">Создание заявки</option>
+              <option value="status_changed">Изменение статуса</option>
+              <option value="priority_changed">Изменение приоритета</option>
+              <option value="file_added">Загрузка файла</option>
+              <option value="file_removed">Удаление файла</option>
+            </select>
+            ${userOptions}
+            <div class="flex items-center gap-2">
+              <label class="text-xs text-gray-500">С:</label>
+              <input type="date" id="act-date-from" value="${activityFilters.date_from}"
+                class="border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none"
+                onchange="activityFilters.date_from=this.value; activityOffset=0; loadActivity()" />
+            </div>
+            <div class="flex items-center gap-2">
+              <label class="text-xs text-gray-500">По:</label>
+              <input type="date" id="act-date-to" value="${activityFilters.date_to}"
+                class="border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none"
+                onchange="activityFilters.date_to=this.value; activityOffset=0; loadActivity()" />
+            </div>
+            <button onclick="activityFilters={action:'all',user_id:'',date_from:'',date_to:''}; activityOffset=0; renderActivity()" class="text-xs text-gray-500 hover:text-red-500 flex items-center gap-1">
+              <i class="fas fa-times"></i>Сбросить
+            </button>
+            <button onclick="activityOffset=0; loadActivity()" class="ml-auto px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700">
+              <i class="fas fa-sync-alt mr-1"></i>Обновить
+            </button>
+          </div>
+        </div>
+
+        <!-- Activity list -->
+        <div id="activity-list-wrap"></div>
+        <div id="activity-load-more" class="text-center hidden">
+          <button onclick="activityOffset+=activityLimit; loadActivity(true)" class="px-6 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm hover:bg-gray-200">
+            <i class="fas fa-chevron-down mr-1"></i>Загрузить ещё
+          </button>
+        </div>
+      </div>
+    `
+    await loadActivity()
+  } catch(e) { content.innerHTML = errorBlock('Ошибка загрузки центра активности') }
+}
+
+async function loadActivity(append = false) {
+  const wrap = document.getElementById('activity-list-wrap')
+  if (!wrap) return
+  if (!append) wrap.innerHTML = '<div class="flex items-center justify-center h-20"><i class="fas fa-spinner fa-spin text-blue-400 text-2xl"></i></div>'
+
+  try {
+    const params = new URLSearchParams({
+      limit: String(activityLimit),
+      offset: String(activityOffset)
+    })
+    if (activityFilters.action !== 'all') params.set('action', activityFilters.action)
+    if (activityFilters.user_id) params.set('user_id', activityFilters.user_id)
+    if (activityFilters.date_from) params.set('date_from', activityFilters.date_from)
+    if (activityFilters.date_to) params.set('date_to', activityFilters.date_to)
+
+    const res = await api.get(`/activity?${params.toString()}`)
+    const items = res.data.activity || []
+    const total = res.data.total || 0
+
+    const actionIcons = {
+      'created':          '<i class="fas fa-plus-circle text-green-500"></i>',
+      'status_changed':   '<i class="fas fa-exchange-alt text-blue-500"></i>',
+      'priority_changed': '<i class="fas fa-flag text-orange-500"></i>',
+      'file_added':       '<i class="fas fa-paperclip text-purple-500"></i>',
+      'file_removed':     '<i class="fas fa-trash text-red-400"></i>',
+    }
+    const actionLabels = {
+      'created':          'Создал заявку',
+      'status_changed':   'Изменил статус',
+      'priority_changed': 'Изменил приоритет',
+      'file_added':       'Загрузил файл',
+      'file_removed':     'Удалил файл',
+    }
+    const statusLabels = { pending: 'На рассмотрении', completed: 'Исполнено', rejected: 'Отклонено' }
+    const priorityLabels = { low: 'Низкий', medium: 'Средний', high: 'Высокий', urgent: 'Срочный' }
+    const roleLabels = { admin: 'Администратор', applicant: 'Заявитель', supplier: 'Снабженец' }
+
+    if (!items.length && !append) {
+      wrap.innerHTML = '<div class="bg-white rounded-xl border border-gray-200 p-12 text-center text-gray-400"><i class="fas fa-stream text-3xl mb-2 block"></i><p>Нет событий</p></div>'
+      return
+    }
+
+    const html = items.map(item => {
+      const icon = actionIcons[item.action] || '<i class="fas fa-circle text-gray-400"></i>'
+      const label = actionLabels[item.action] || item.action
+      const dt = new Date(item.created_at).toLocaleString('ru-RU')
+      const roleLabel = roleLabels[item.actor_role] || item.actor_role
+
+      let detail = ''
+      if (item.action === 'status_changed') {
+        const from = statusLabels[item.old_value] || item.old_value || ''
+        const to = statusLabels[item.new_value] || item.new_value || ''
+        detail = `<span class="text-gray-400">${from}</span> → <span class="font-medium">${to}</span>`
+        if (item.comment) detail += ` <span class="text-red-500 text-xs">(${escHtml(item.comment)})</span>`
+      } else if (item.action === 'priority_changed') {
+        const from = priorityLabels[item.old_value] || item.old_value || ''
+        const to = priorityLabels[item.new_value] || item.new_value || ''
+        detail = `<span class="text-gray-400">${from}</span> → <span class="font-medium">${to}</span>`
+      } else if (item.action === 'file_added') {
+        detail = `<span class="text-gray-600">${escHtml(item.new_value || '')}</span>`
+      } else if (item.action === 'file_removed') {
+        detail = `<span class="text-red-400 line-through">${escHtml(item.old_value || '')}</span>`
+      } else if (item.comment) {
+        detail = `<span class="text-gray-600">${escHtml(item.comment)}</span>`
+      }
+
+      return `
+        <div class="flex gap-3 items-start py-3 border-b border-gray-100 last:border-0 hover:bg-gray-50 px-2 rounded-lg transition">
+          <div class="w-9 h-9 flex-shrink-0 rounded-full bg-gray-100 flex items-center justify-center text-lg mt-0.5">
+            ${icon}
+          </div>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center flex-wrap gap-x-2 gap-y-0.5">
+              <span class="font-medium text-gray-800">${escHtml(item.actor_name)}</span>
+              <span class="text-xs text-gray-400">${roleLabel}</span>
+              <span class="text-sm text-gray-600">${label}</span>
+            </div>
+            <div class="text-sm text-gray-700 mt-0.5">
+              <span class="text-blue-600 cursor-pointer hover:underline" onclick="openRequest(${item.request_id})">${escHtml(item.request_number || '#'+item.request_id)}</span>
+              — <span class="font-medium">${escHtml(item.product_name)}</span>
+              ${item.model ? `<span class="text-gray-400">(${escHtml(item.model)})</span>` : ''}
+              ${detail ? `<span class="ml-1">${detail}</span>` : ''}
+            </div>
+          </div>
+          <div class="text-xs text-gray-400 flex-shrink-0 mt-1">${dt}</div>
+        </div>
+      `
+    }).join('')
+
+    if (append) {
+      const existing = wrap.querySelector('.activity-list-inner')
+      if (existing) existing.insertAdjacentHTML('beforeend', html)
+      else wrap.innerHTML = `<div class="bg-white rounded-xl border border-gray-200 p-4"><div class="activity-list-inner">${html}</div></div>`
+    } else {
+      wrap.innerHTML = `
+        <div class="bg-white rounded-xl border border-gray-200 p-4">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-sm text-gray-500">Показано ${Math.min(activityOffset + activityLimit, total)} из ${total} событий</span>
+          </div>
+          <div class="activity-list-inner">${html}</div>
+        </div>
+      `
+    }
+
+    const loadMoreBtn = document.getElementById('activity-load-more')
+    if (loadMoreBtn) {
+      if (activityOffset + activityLimit < total) {
+        loadMoreBtn.classList.remove('hidden')
+      } else {
+        loadMoreBtn.classList.add('hidden')
+      }
+    }
+  } catch(e) {
+    if (!append) wrap.innerHTML = errorBlock('Ошибка загрузки событий')
+  }
+}
+
 // ===== SIDEBAR AVATAR =====
+function openRequest(id) {
+  openRequestModal(id)
+}
 function updateSidebarAvatar() {
   const el = document.getElementById('sidebar-avatar')
   if (!el) return

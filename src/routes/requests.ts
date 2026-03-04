@@ -496,6 +496,82 @@ app.get('/:id/history', async (c) => {
 })
 
 // ============================================================
+// EXPORT TO CSV (supplier + admin)
+// ============================================================
+app.get('/export/csv', async (c) => {
+  const user = await getAuthUser(c.env.DB, c.req.header('Authorization'))
+  if (!user) return c.json({ error: 'Не авторизован' }, 401)
+  if (!['supplier', 'admin'].includes(user.role)) return c.json({ error: 'Доступ запрещён' }, 403)
+
+  const date_from = c.req.query('date_from')
+  const date_to = c.req.query('date_to')
+  const project_id = c.req.query('project_id')
+  const applicant_id = c.req.query('applicant_id')
+  const status = c.req.query('status')
+  const priority = c.req.query('priority')
+
+  let query = `
+    SELECT r.request_number, r.product_name, r.model, r.quantity,
+           r.status, r.priority, r.comment, r.rejection_reason,
+           r.created_at, r.updated_at,
+           u.full_name as applicant_name, u.email as applicant_email,
+           p.name as project_name
+    FROM requests r
+    JOIN users u ON r.applicant_id = u.id
+    LEFT JOIN projects p ON r.project_id = p.id
+    WHERE 1=1
+  `
+  let params: (string | number)[] = []
+
+  if (status && status !== 'all') { query += ' AND r.status = ?'; params.push(status) }
+  if (priority && priority !== 'all') { query += ' AND r.priority = ?'; params.push(priority) }
+  if (project_id && project_id !== 'all') { query += ' AND r.project_id = ?'; params.push(parseInt(project_id)) }
+  if (applicant_id) { query += ' AND r.applicant_id = ?'; params.push(parseInt(applicant_id)) }
+  if (date_from) { query += ' AND r.created_at >= ?'; params.push(date_from) }
+  if (date_to) { query += ' AND r.created_at <= ?'; params.push(date_to + 'T23:59:59') }
+
+  query += ' ORDER BY r.created_at DESC'
+
+  const results = await c.env.DB.prepare(query).bind(...params).all()
+  const rows = results.results as any[]
+
+  const statusLabels: Record<string, string> = { pending: 'На рассмотрении', completed: 'Исполнено', rejected: 'Отклонено' }
+  const priorityLabels: Record<string, string> = { low: 'Низкий', medium: 'Средний', high: 'Высокий', urgent: 'Срочный' }
+
+  const escape = (v: any) => {
+    if (v == null) return ''
+    const s = String(v).replace(/"/g, '""')
+    return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s}"` : s
+  }
+
+  const headers = ['Номер заявки','Товар','Модель','Количество','Статус','Приоритет',
+    'Проект','Заявитель','Email заявителя','Комментарий','Причина отклонения','Дата создания','Дата обновления']
+
+  const csvRows = [
+    headers.join(','),
+    ...rows.map(r => [
+      r.request_number, r.product_name, r.model, r.quantity,
+      statusLabels[r.status] || r.status,
+      priorityLabels[r.priority] || r.priority,
+      r.project_name || '',
+      r.applicant_name, r.applicant_email,
+      r.comment || '', r.rejection_reason || '',
+      r.created_at, r.updated_at
+    ].map(escape).join(','))
+  ]
+
+  const csv = '\uFEFF' + csvRows.join('\r\n') // BOM for Excel UTF-8
+  const filename = `tenoil-requests-${new Date().toISOString().slice(0,10)}.csv`
+
+  return new Response(csv, {
+    headers: {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': `attachment; filename="${filename}"`
+    }
+  })
+})
+
+// ============================================================
 // STATS (supplier + admin)
 // ============================================================
 app.get('/stats/summary', async (c) => {

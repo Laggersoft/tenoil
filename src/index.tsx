@@ -5,6 +5,7 @@ import requestRoutes from './routes/requests'
 import notificationRoutes from './routes/notifications'
 import userRoutes from './routes/users'
 import projectRoutes from './routes/projects'
+import activityRoutes from './routes/activity'
 
 type Bindings = {
   DB: D1Database
@@ -24,5 +25,6 @@ app.route('/api/requests', requestRoutes)
 app.route('/api/notifications', notificationRoutes)
 app.route('/api/users', userRoutes)
 app.route('/api/projects', projectRoutes)
+app.route('/api/activity', activityRoutes)
 
 export default app
