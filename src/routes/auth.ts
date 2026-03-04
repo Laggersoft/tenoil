@@ -202,4 +202,51 @@ app.put('/profile', async (c) => {
   return c.json({ message: 'Профиль обновлён', user: updated })
 })
 
+// GET /api/auth/profile/stats — статистика заявок пользователя
+app.get('/profile/stats', async (c) => {
+  const user = await getAuthUser(c.env.DB, c.req.header('Authorization'))
+  if (!user) return c.json({ error: 'Не авторизован' }, 401)
+
+  const total = await c.env.DB.prepare(
+    'SELECT COUNT(*) as count FROM requests WHERE applicant_id = ?'
+  ).bind(user.id).first<{ count: number }>()
+
+  const pending = await c.env.DB.prepare(
+    "SELECT COUNT(*) as count FROM requests WHERE applicant_id = ? AND status = 'pending'"
+  ).bind(user.id).first<{ count: number }>()
+
+  const completed = await c.env.DB.prepare(
+    "SELECT COUNT(*) as count FROM requests WHERE applicant_id = ? AND status = 'completed'"
+  ).bind(user.id).first<{ count: number }>()
+
+  const rejected = await c.env.DB.prepare(
+    "SELECT COUNT(*) as count FROM requests WHERE applicant_id = ? AND status = 'rejected'"
+  ).bind(user.id).first<{ count: number }>()
+
+  // For admin/supplier — global stats
+  let globalStats = null
+  if (['admin', 'supplier'].includes(user.role)) {
+    const gTotal = await c.env.DB.prepare('SELECT COUNT(*) as count FROM requests').first<{ count: number }>()
+    const gPending = await c.env.DB.prepare("SELECT COUNT(*) as count FROM requests WHERE status = 'pending'").first<{ count: number }>()
+    const gCompleted = await c.env.DB.prepare("SELECT COUNT(*) as count FROM requests WHERE status = 'completed'").first<{ count: number }>()
+    const gRejected = await c.env.DB.prepare("SELECT COUNT(*) as count FROM requests WHERE status = 'rejected'").first<{ count: number }>()
+    globalStats = {
+      total: gTotal?.count || 0,
+      pending: gPending?.count || 0,
+      completed: gCompleted?.count || 0,
+      rejected: gRejected?.count || 0,
+    }
+  }
+
+  return c.json({
+    my: {
+      total: total?.count || 0,
+      pending: pending?.count || 0,
+      completed: completed?.count || 0,
+      rejected: rejected?.count || 0,
+    },
+    global: globalStats
+  })
+})
+
 export default app

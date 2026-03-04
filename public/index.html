@@ -901,52 +901,71 @@ function applicantCard(r) {
 }
 
 // ===== NEW REQUEST =====
+let requestItems = [{ product_name: '', model: '', quantity: 1, unit: 'шт.' }]
+
 function renderNewRequest() {
   const content = document.getElementById('main-content')
   const projectOptions = projectsList.map(p => `<option value="${p.id}">${escHtml(p.name)}</option>`).join('')
+  requestItems = [{ product_name: '', model: '', quantity: 1, unit: 'шт.' }]
 
   content.innerHTML = `
-    <div class="fade-in max-w-xl">
+    <div class="fade-in max-w-3xl">
       <div class="bg-white rounded-xl border border-gray-200 p-6">
         <h3 class="text-lg font-bold text-gray-800 mb-6 flex items-center gap-2">
           <i class="fas fa-plus-circle text-blue-500"></i>Создать заявку
         </h3>
         <div id="new-req-error" class="hidden mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm"></div>
-        <div class="space-y-4">
-          <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">Проект <span class="text-gray-400">(необязательно)</span></label>
-            <select id="nr-project" class="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
-              <option value="">— Выберите проект —</option>
-              ${projectOptions}
-            </select>
+        <div class="space-y-5">
+
+          <!-- Project + Priority row -->
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Проект <span class="text-gray-400">(необязательно)</span></label>
+              <select id="nr-project" class="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="">— Выберите проект —</option>
+                ${projectOptions}
+              </select>
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Приоритет <span class="text-red-500">*</span></label>
+              <select id="nr-priority" class="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="low">🟢 Низкий</option>
+                <option value="medium" selected>🟡 Средний</option>
+                <option value="high">🟠 Высокий</option>
+                <option value="urgent">🔴 Срочный</option>
+              </select>
+            </div>
           </div>
+
+          <!-- Items table -->
           <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">Наименование товара <span class="text-red-500">*</span></label>
-            <input id="nr-product" type="text" placeholder="Например: Ноутбук, Принтер..."
-              class="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <label class="block text-sm font-medium text-gray-700 mb-2">
+              <i class="fas fa-list-ol mr-1 text-blue-500"></i>Позиции заявки <span class="text-red-500">*</span>
+            </label>
+            <div class="border border-gray-200 rounded-xl overflow-hidden">
+              <table class="w-full text-sm">
+                <thead class="bg-gray-50 border-b border-gray-200">
+                  <tr>
+                    <th class="px-3 py-2.5 text-left text-xs font-semibold text-gray-500 w-8">№</th>
+                    <th class="px-3 py-2.5 text-left text-xs font-semibold text-gray-500">Наименование товара <span class="text-red-400">*</span></th>
+                    <th class="px-3 py-2.5 text-left text-xs font-semibold text-gray-500">Модель / Арт. <span class="text-red-400">*</span></th>
+                    <th class="px-3 py-2.5 text-center text-xs font-semibold text-gray-500 w-24">Кол-во <span class="text-red-400">*</span></th>
+                    <th class="px-3 py-2.5 text-center text-xs font-semibold text-gray-500 w-20">Ед.</th>
+                    <th class="w-10"></th>
+                  </tr>
+                </thead>
+                <tbody id="items-tbody"></tbody>
+              </table>
+            </div>
+            <button onclick="addRequestItem()" class="mt-3 flex items-center gap-2 px-4 py-2 text-sm text-blue-600 border border-blue-200 rounded-lg hover:bg-blue-50 transition">
+              <i class="fas fa-plus"></i>Добавить позицию
+            </button>
           </div>
+
+          <!-- Comment -->
           <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">Модель <span class="text-red-500">*</span></label>
-            <input id="nr-model" type="text" placeholder="Например: Dell XPS 15, HP LaserJet..."
-              class="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">Количество <span class="text-red-500">*</span></label>
-            <input id="nr-qty" type="number" min="1" placeholder="1" value="1"
-              class="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">Приоритет <span class="text-red-500">*</span></label>
-            <select id="nr-priority" class="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
-              <option value="low">Низкий</option>
-              <option value="medium" selected>Средний</option>
-              <option value="high">Высокий</option>
-              <option value="urgent">Срочный</option>
-            </select>
-          </div>
-          <div>
-            <label class="block text-sm font-medium text-gray-700 mb-1">Комментарий <span class="text-gray-400">(необязательно)</span></label>
-            <textarea id="nr-comment" rows="3" placeholder="Дополнительные требования..."
+            <label class="block text-sm font-medium text-gray-700 mb-1">Комментарий к заявке <span class="text-gray-400">(необязательно)</span></label>
+            <textarea id="nr-comment" rows="3" placeholder="Дополнительные требования к заявке..."
               class="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"></textarea>
           </div>
 
@@ -975,6 +994,64 @@ function renderNewRequest() {
     </div>
   `
   window._pendingFiles = []
+  renderItemsTable()
+}
+
+function renderItemsTable() {
+  const tbody = document.getElementById('items-tbody')
+  if (!tbody) return
+  tbody.innerHTML = requestItems.map((item, idx) => `
+    <tr class="border-b border-gray-100 last:border-0 ${idx % 2 === 1 ? 'bg-gray-50/50' : 'bg-white'}">
+      <td class="px-3 py-2 text-center text-gray-400 text-xs font-medium">${idx + 1}</td>
+      <td class="px-2 py-1.5">
+        <input type="text" value="${escHtml(item.product_name)}" placeholder="Насос, Кабель, Ноутбук..."
+          oninput="requestItems[${idx}].product_name=this.value"
+          class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+      </td>
+      <td class="px-2 py-1.5">
+        <input type="text" value="${escHtml(item.model)}" placeholder="Арт. / Марка / Тип..."
+          oninput="requestItems[${idx}].model=this.value"
+          class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400" />
+      </td>
+      <td class="px-2 py-1.5">
+        <input type="number" value="${item.quantity}" min="1"
+          oninput="requestItems[${idx}].quantity=parseInt(this.value)||1"
+          class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm text-center focus:outline-none focus:ring-2 focus:ring-blue-400" />
+      </td>
+      <td class="px-2 py-1.5">
+        <select oninput="requestItems[${idx}].unit=this.value"
+          class="w-full px-2 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+          <option value="шт." ${item.unit==='шт.'?'selected':''}>шт.</option>
+          <option value="м" ${item.unit==='м'?'selected':''}>м</option>
+          <option value="кг" ${item.unit==='кг'?'selected':''}>кг</option>
+          <option value="л" ${item.unit==='л'?'selected':''}>л</option>
+          <option value="комп." ${item.unit==='комп.'?'selected':''}>комп.</option>
+          <option value="уп." ${item.unit==='уп.'?'selected':''}>уп.</option>
+          <option value="рул." ${item.unit==='рул.'?'selected':''}>рул.</option>
+        </select>
+      </td>
+      <td class="px-2 py-1.5 text-center">
+        ${requestItems.length > 1 ? `
+        <button onclick="removeRequestItem(${idx})" class="w-7 h-7 flex items-center justify-center text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition">
+          <i class="fas fa-trash text-xs"></i>
+        </button>` : '<span class="text-gray-200 text-xs"><i class="fas fa-lock"></i></span>'}
+      </td>
+    </tr>
+  `).join('')
+}
+
+function addRequestItem() {
+  requestItems.push({ product_name: '', model: '', quantity: 1, unit: 'шт.' })
+  renderItemsTable()
+  // Focus on last product_name input
+  const inputs = document.querySelectorAll('#items-tbody input[type=text]')
+  if (inputs.length >= 2) inputs[inputs.length - 2].focus()
+}
+
+function removeRequestItem(idx) {
+  if (requestItems.length <= 1) return
+  requestItems.splice(idx, 1)
+  renderItemsTable()
 }
 
 let pendingFiles = []
@@ -1028,40 +1105,46 @@ async function fileToBase64(file) {
 
 async function submitNewRequest() {
   const project_id = document.getElementById('nr-project').value || null
-  const product_name = document.getElementById('nr-product').value.trim()
-  const model = document.getElementById('nr-model').value.trim()
-  const quantity = parseInt(document.getElementById('nr-qty').value)
   const comment = document.getElementById('nr-comment').value.trim()
   const priority = document.getElementById('nr-priority').value
   const errEl = document.getElementById('new-req-error')
   errEl.classList.add('hidden')
 
-  if (!product_name || !model || !quantity) {
-    errEl.textContent = 'Заполните обязательные поля'
+  // Validate items
+  const validItems = requestItems.filter(i => i.product_name.trim() && i.model.trim())
+  if (!validItems.length) {
+    errEl.textContent = 'Заполните хотя бы одну позицию (наименование и модель)'
     errEl.classList.remove('hidden')
     return
   }
+  for (const item of validItems) {
+    if (!item.quantity || item.quantity < 1) {
+      errEl.textContent = 'Количество в каждой позиции должно быть больше 0'
+      errEl.classList.remove('hidden')
+      return
+    }
+  }
 
   try {
-    const res = await api.post('/requests', { product_name, model, quantity, comment: comment||undefined, project_id: project_id ? parseInt(project_id) : null, priority })
+    const res = await api.post('/requests', {
+      items: validItems.map(i => ({ ...i, quantity: parseInt(String(i.quantity)) })),
+      comment: comment || undefined,
+      project_id: project_id ? parseInt(project_id) : null,
+      priority
+    })
     const requestId = res.data.id
 
     // Upload files if any
     for (const file of pendingFiles) {
       try {
         const file_data = await fileToBase64(file)
-        await api.post(`/requests/${requestId}/files`, {
-          file_name: file.name,
-          mime_type: file.type,
-          file_data
-        })
-      } catch(e) {
-        showToast(`Ошибка загрузки файла: ${file.name}`, 'warning')
-      }
+        await api.post(`/requests/${requestId}/files`, { file_name: file.name, mime_type: file.type, file_data })
+      } catch(e) { showToast(`Ошибка загрузки файла: ${file.name}`, 'warning') }
     }
 
     pendingFiles = []
-    showToast('Заявка отправлена!', 'success')
+    requestItems = [{ product_name: '', model: '', quantity: 1, unit: 'шт.' }]
+    showToast(`Заявка ${res.data.request_number} отправлена!`, 'success')
     navigateTo('my-requests')
   } catch(e) {
     errEl.textContent = e.response?.data?.error || 'Ошибка отправки'
@@ -1080,9 +1163,61 @@ async function openRequestModal(id) {
     const res = await api.get(`/requests/${id}`)
     const r = res.data.request
     const files = res.data.files || []
+    const items = res.data.items || []
 
     const canChangeStatus = ['supplier', 'admin'].includes(currentUser.role)
     const isOwner = currentUser.role === 'applicant' && r.applicant_id === currentUser.id
+
+    // Build items table HTML
+    const itemsTableHtml = items.length > 0 ? `
+      <div class="border border-gray-200 rounded-xl overflow-hidden">
+        <table class="w-full text-sm">
+          <thead class="bg-blue-50 border-b border-gray-200">
+            <tr>
+              <th class="px-3 py-2.5 text-center text-xs font-semibold text-blue-700 w-10">№</th>
+              <th class="px-3 py-2.5 text-left text-xs font-semibold text-blue-700">Наименование</th>
+              <th class="px-3 py-2.5 text-left text-xs font-semibold text-blue-700">Модель / Арт.</th>
+              <th class="px-3 py-2.5 text-center text-xs font-semibold text-blue-700 w-20">Кол-во</th>
+              <th class="px-3 py-2.5 text-center text-xs font-semibold text-blue-700 w-16">Ед.</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${items.map((item, idx) => `
+              <tr class="${idx % 2 === 1 ? 'bg-gray-50' : 'bg-white'} border-b border-gray-100 last:border-0">
+                <td class="px-3 py-2.5 text-center text-gray-400 text-xs">${item.item_number}</td>
+                <td class="px-3 py-2.5 font-medium text-gray-800">${escHtml(item.product_name)}</td>
+                <td class="px-3 py-2.5 text-gray-600">${escHtml(item.model)}</td>
+                <td class="px-3 py-2.5 text-center font-semibold text-gray-800">${item.quantity}</td>
+                <td class="px-3 py-2.5 text-center text-gray-500">${escHtml(item.unit || 'шт.')}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+          ${items.length > 1 ? `
+          <tfoot class="bg-gray-50 border-t border-gray-200">
+            <tr>
+              <td colspan="3" class="px-3 py-2 text-right text-xs text-gray-500 font-medium">Итого позиций: ${items.length}</td>
+              <td class="px-3 py-2 text-center text-xs font-bold text-gray-700">${items.reduce((s, i) => s + (i.quantity||0), 0)}</td>
+              <td></td>
+            </tr>
+          </tfoot>` : ''}
+        </table>
+      </div>
+    ` : `
+      <div class="bg-gray-50 rounded-lg p-4 grid grid-cols-2 gap-4">
+        <div>
+          <p class="text-xs text-gray-500 mb-1">Наименование</p>
+          <p class="font-semibold text-gray-800">${escHtml(r.product_name)}</p>
+        </div>
+        <div>
+          <p class="text-xs text-gray-500 mb-1">Модель</p>
+          <p class="font-semibold text-gray-800">${escHtml(r.model)}</p>
+        </div>
+        <div>
+          <p class="text-xs text-gray-500 mb-1">Количество</p>
+          <p class="font-semibold text-gray-800">${r.quantity} шт.</p>
+        </div>
+      </div>
+    `
 
     mc.innerHTML = `
       <div>
@@ -1124,18 +1259,6 @@ async function openRequestModal(id) {
             </div>
             ` : ''}
             <div class="bg-gray-50 rounded-lg p-4">
-              <p class="text-xs text-gray-500 mb-1">Наименование</p>
-              <p class="font-semibold text-gray-800">${escHtml(r.product_name)}</p>
-            </div>
-            <div class="bg-gray-50 rounded-lg p-4">
-              <p class="text-xs text-gray-500 mb-1">Модель</p>
-              <p class="font-semibold text-gray-800">${escHtml(r.model)}</p>
-            </div>
-            <div class="bg-gray-50 rounded-lg p-4">
-              <p class="text-xs text-gray-500 mb-1">Количество</p>
-              <p class="font-semibold text-gray-800">${r.quantity} шт.</p>
-            </div>
-            <div class="bg-gray-50 rounded-lg p-4">
               <p class="text-xs text-gray-500 mb-1">Статус</p>
               ${statusBadge(r.status)}
             </div>
@@ -1143,6 +1266,14 @@ async function openRequestModal(id) {
               <p class="text-xs text-gray-500 mb-1">Приоритет</p>
               ${priorityBadge(r.priority || 'medium')}
             </div>
+          </div>
+
+          <!-- Items table -->
+          <div>
+            <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+              <i class="fas fa-list-ol mr-1"></i>Позиции заявки
+            </p>
+            ${itemsTableHtml}
           </div>
 
           ${canChangeStatus ? `
@@ -1502,11 +1633,15 @@ async function downloadRequestPDF(id) {
     const res = await api.get(`/requests/${id}`)
     const r = res.data.request
     const files = res.data.files || []
+    const items = res.data.items || []
 
     const priorityNames = { low: 'Низкий', medium: 'Средний', high: 'Высокий', urgent: 'Срочный' }
     const statusNames   = { pending: 'На рассмотрении', completed: 'Исполнено', rejected: 'Отклонено' }
     const priorityColors = { low: '#166534', medium: '#92400e', high: '#9a3412', urgent: '#7f1d1d' }
     const statusColors   = { pending: '#92400e', completed: '#065f46', rejected: '#991b1b' }
+
+    // Build items table for PDF
+    const itemsRows = items.length > 0 ? items : [{ item_number: 1, product_name: r.product_name, model: r.model, quantity: r.quantity, unit: 'шт.' }]
 
     const html = `<!DOCTYPE html>
 <html lang="ru">
@@ -1527,6 +1662,11 @@ async function downloadRequestPDF(id) {
   .field label { font-size:10px; color:#9ca3af; text-transform:uppercase; letter-spacing:0.05em; display:block; margin-bottom:3px; }
   .field value { font-weight:600; font-size:13px; }
   .badge { display:inline-block; padding:3px 10px; border-radius:20px; font-size:11px; font-weight:700; }
+  .items-table { width:100%; border-collapse:collapse; margin-bottom:20px; border:1px solid #e5e7eb; border-radius:8px; overflow:hidden; }
+  .items-table thead th { background:#1e3a8a; color:#fff; text-align:left; padding:9px 12px; font-size:11px; text-transform:uppercase; letter-spacing:0.05em; }
+  .items-table tbody tr:nth-child(even) { background:#f9fafb; }
+  .items-table tbody td { padding:9px 12px; border-bottom:1px solid #f3f4f6; font-size:13px; }
+  .items-table tfoot td { background:#f3f4f6; padding:8px 12px; font-weight:700; font-size:12px; }
   .files-table { width:100%; border-collapse:collapse; margin-top:8px; }
   .files-table th { background:#f3f4f6; text-align:left; padding:7px 10px; font-size:11px; color:#6b7280; text-transform:uppercase; }
   .files-table td { padding:7px 10px; border-bottom:1px solid #f3f4f6; font-size:12px; }
@@ -1551,19 +1691,41 @@ async function downloadRequestPDF(id) {
 
 <h2><i>Информация о заявке</i></h2>
 <div class="grid2">
-  <div class="field"><label>Наименование товара</label><value>${escHtml(r.product_name)}</value></div>
-  <div class="field"><label>Модель</label><value>${escHtml(r.model)}</value></div>
-  <div class="field"><label>Количество</label><value>${r.quantity} шт.</value></div>
   <div class="field"><label>Проект</label><value>${escHtml(r.project_name || '—')}</value></div>
+  <div class="field"><label>Заявитель</label><value>${escHtml(r.applicant_name)}</value></div>
   <div class="field"><label>Статус</label>
     <value><span class="badge" style="background:${statusColors[r.status]+'22'};color:${statusColors[r.status]}">${statusNames[r.status] || r.status}</span></value>
   </div>
   <div class="field"><label>Приоритет</label>
     <value><span class="badge" style="background:${priorityColors[r.priority||'medium']+'22'};color:${priorityColors[r.priority||'medium']}">${priorityNames[r.priority||'medium']}</span></value>
   </div>
-  <div class="field"><label>Заявитель</label><value>${escHtml(r.applicant_name)}</value></div>
-  <div class="field"><label>Email заявителя</label><value>${escHtml(r.applicant_email || '—')}</value></div>
 </div>
+
+<h2><i>Позиции заявки</i></h2>
+<table class="items-table">
+  <thead>
+    <tr><th>№</th><th>Наименование товара</th><th>Модель / Арт.</th><th style="text-align:center">Кол-во</th><th style="text-align:center">Ед.</th></tr>
+  </thead>
+  <tbody>
+    ${itemsRows.map((item, i) => `
+      <tr>
+        <td style="text-align:center;color:#9ca3af">${item.item_number || (i+1)}</td>
+        <td><b>${escHtml(item.product_name)}</b></td>
+        <td>${escHtml(item.model)}</td>
+        <td style="text-align:center;font-weight:700">${item.quantity}</td>
+        <td style="text-align:center;color:#6b7280">${escHtml(item.unit || 'шт.')}</td>
+      </tr>
+    `).join('')}
+  </tbody>
+  ${itemsRows.length > 1 ? `
+  <tfoot>
+    <tr>
+      <td colspan="3" style="text-align:right;color:#6b7280">Итого позиций: ${itemsRows.length}</td>
+      <td style="text-align:center">${itemsRows.reduce((s, i) => s + (i.quantity||0), 0)}</td>
+      <td></td>
+    </tr>
+  </tfoot>` : ''}
+</table>
 
 ${r.comment ? `<div class="comment-box"><b>Комментарий:</b> ${escHtml(r.comment)}</div>` : ''}
 ${r.rejection_reason ? `<div class="rejection-box"><b>Причина отказа:</b> ${escHtml(r.rejection_reason)}</div>` : ''}
@@ -1599,12 +1761,57 @@ async function renderProfile() {
   const content = document.getElementById('main-content')
   content.innerHTML = '<div class="flex items-center justify-center h-40"><i class="fas fa-spinner fa-spin text-blue-500 text-3xl"></i></div>'
   try {
-    const res = await api.get('/auth/profile')
-    const u = res.data
+    const [profileRes, statsRes] = await Promise.all([
+      api.get('/auth/profile'),
+      api.get('/auth/profile/stats')
+    ])
+    const u = profileRes.data
+    const stats = statsRes.data
     const roleNames = { admin: 'Администратор', applicant: 'Заявитель', supplier: 'Снабженец' }
 
+    // Stats cards
+    const myStats = stats.my || {}
+    const statCardsHtml = `
+      <div class="bg-white rounded-xl border border-gray-200 p-5">
+        <h3 class="text-sm font-bold text-gray-700 mb-4 flex items-center gap-2">
+          <i class="fas fa-chart-bar text-blue-500"></i>
+          ${currentUser.role === 'applicant' ? 'Мои заявки' : 'Статистика заявок'}
+        </h3>
+        <div class="grid grid-cols-4 gap-3">
+          <div class="text-center p-3 bg-blue-50 rounded-xl">
+            <div class="text-2xl font-bold text-blue-600">${myStats.total || 0}</div>
+            <div class="text-xs text-gray-500 mt-1">Всего создано</div>
+          </div>
+          <div class="text-center p-3 bg-yellow-50 rounded-xl">
+            <div class="text-2xl font-bold text-yellow-600">${myStats.pending || 0}</div>
+            <div class="text-xs text-gray-500 mt-1">На рассмотрении</div>
+          </div>
+          <div class="text-center p-3 bg-green-50 rounded-xl">
+            <div class="text-2xl font-bold text-green-600">${myStats.completed || 0}</div>
+            <div class="text-xs text-gray-500 mt-1">Исполнено</div>
+          </div>
+          <div class="text-center p-3 bg-red-50 rounded-xl">
+            <div class="text-2xl font-bold text-red-500">${myStats.rejected || 0}</div>
+            <div class="text-xs text-gray-500 mt-1">Отклонено</div>
+          </div>
+        </div>
+        ${stats.global ? `
+        <div class="mt-4 pt-4 border-t border-gray-100">
+          <p class="text-xs text-gray-500 mb-2 font-medium">В системе всего:</p>
+          <div class="flex flex-wrap gap-3 text-xs">
+            <span class="px-2.5 py-1.5 bg-gray-100 rounded-lg"><b class="text-gray-700">${stats.global.total}</b> заявок</span>
+            <span class="px-2.5 py-1.5 bg-yellow-50 rounded-lg"><b class="text-yellow-700">${stats.global.pending}</b> ожидают</span>
+            <span class="px-2.5 py-1.5 bg-green-50 rounded-lg"><b class="text-green-700">${stats.global.completed}</b> исполнено</span>
+            <span class="px-2.5 py-1.5 bg-red-50 rounded-lg"><b class="text-red-600">${stats.global.rejected}</b> отклонено</span>
+          </div>
+        </div>` : ''}
+      </div>
+    `
+
     content.innerHTML = `
-      <div class="fade-in max-w-2xl space-y-6">
+      <div class="fade-in max-w-2xl space-y-5">
+        ${statCardsHtml}
+
         <!-- Profile Card -->
         <div class="bg-white rounded-xl border border-gray-200 p-6">
           <div class="flex items-center gap-5 mb-6">

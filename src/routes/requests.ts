@@ -79,24 +79,51 @@ app.post('/', async (c) => {
   if (!user) return c.json({ error: 'Не авторизован' }, 401)
   if (user.role !== 'applicant') return c.json({ error: 'Только заявители могут создавать заявки' }, 403)
 
-  const { product_name, model, quantity, comment, project_id, priority } = await c.req.json()
+  const body = await c.req.json()
+  const { comment, project_id, priority } = body
 
-  if (!product_name || !model || !quantity) {
-    return c.json({ error: 'Наименование, модель и количество обязательны' }, 400)
+  // Support both: single item (legacy) and items array
+  let items: Array<{ product_name: string; model: string; quantity: number; unit?: string; comment?: string }> = []
+
+  if (Array.isArray(body.items) && body.items.length > 0) {
+    items = body.items
+  } else if (body.product_name) {
+    // Legacy single-item mode
+    items = [{ product_name: body.product_name, model: body.model, quantity: body.quantity }]
   }
 
-  if (quantity <= 0) {
-    return c.json({ error: 'Количество должно быть больше 0' }, 400)
+  if (!items.length) {
+    return c.json({ error: 'Необходимо указать хотя бы одну позицию' }, 400)
+  }
+
+  for (const item of items) {
+    if (!item.product_name?.trim() || !item.model?.trim()) {
+      return c.json({ error: 'У каждой позиции должны быть наименование и модель' }, 400)
+    }
+    if (!item.quantity || item.quantity <= 0) {
+      return c.json({ error: 'Количество в каждой позиции должно быть больше 0' }, 400)
+    }
   }
 
   const validPriorities = ['low', 'medium', 'high', 'urgent']
   const reqPriority = validPriorities.includes(priority) ? priority : 'medium'
 
+  // Use first item for legacy fields
+  const firstItem = items[0]
   const result = await c.env.DB.prepare(
     'INSERT INTO requests (applicant_id, project_id, product_name, model, quantity, comment, priority) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).bind(user.id, project_id || null, product_name, model, quantity, comment || null, reqPriority).run()
+  ).bind(user.id, project_id || null, firstItem.product_name, firstItem.model, firstItem.quantity, comment || null, reqPriority).run()
 
   const requestId = result.meta.last_row_id as number
+
+  // Insert all items into request_items
+  const itemStmt = c.env.DB.prepare(
+    'INSERT INTO request_items (request_id, item_number, product_name, model, quantity, unit, comment) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  )
+  const itemBatch = items.map((item, idx) =>
+    itemStmt.bind(requestId, idx + 1, item.product_name.trim(), item.model.trim(), item.quantity, item.unit || 'шт.', item.comment || null)
+  )
+  await c.env.DB.batch(itemBatch)
 
   // Generate and set request_number
   const requestNumber = generateRequestNumber(requestId)
@@ -105,31 +132,26 @@ app.post('/', async (c) => {
   ).bind(requestNumber, requestId).run()
 
   // Audit log: created
+  const itemsDesc = items.length === 1
+    ? `${firstItem.product_name} (${firstItem.model}), кол-во: ${firstItem.quantity}`
+    : `${items.length} позиций`
   await logHistory(c.env.DB, requestId, user.id, 'created', null, 'pending', `Заявка создана пользователем ${user.full_name}`)
 
-  // Notify all suppliers
+  // Notify all suppliers and admins
   const suppliers = await c.env.DB.prepare(
     "SELECT id FROM users WHERE role = 'supplier' AND is_blocked = 0"
   ).all<{ id: number }>()
-
-  // Notify admins too
   const admins = await c.env.DB.prepare(
     "SELECT id FROM users WHERE role = 'admin' AND is_blocked = 0"
   ).all<{ id: number }>()
 
   const allRecipients = [...(suppliers.results || []), ...(admins.results || [])]
-
   if (allRecipients.length) {
     const notifyStmt = c.env.DB.prepare(
       'INSERT INTO notifications (user_id, title, message, request_id) VALUES (?, ?, ?, ?)'
     )
     const batch = allRecipients.map((s) =>
-      notifyStmt.bind(
-        s.id,
-        'Новая заявка',
-        `${user.full_name} создал заявку: ${product_name} (${model}), кол-во: ${quantity}`,
-        requestId
-      )
+      notifyStmt.bind(s.id, 'Новая заявка', `${user.full_name} создал заявку: ${itemsDesc}`, requestId)
     )
     await c.env.DB.batch(batch)
   }
@@ -244,6 +266,14 @@ app.get('/:id', async (c) => {
     return c.json({ error: 'Доступ запрещён' }, 403)
   }
 
+  // Get items (positions)
+  const items = await c.env.DB.prepare(`
+    SELECT id, item_number, product_name, model, quantity, unit, comment
+    FROM request_items
+    WHERE request_id = ?
+    ORDER BY item_number ASC
+  `).bind(id).all()
+
   // Get files (without file_data for listing)
   const files = await c.env.DB.prepare(`
     SELECT f.id, f.file_name, f.file_size, f.mime_type, f.created_at,
@@ -254,7 +284,7 @@ app.get('/:id', async (c) => {
     ORDER BY f.created_at ASC
   `).bind(id).all()
 
-  return c.json({ request, files: files.results })
+  return c.json({ request, items: items.results, files: files.results })
 })
 
 // ============================================================
@@ -496,7 +526,8 @@ app.get('/:id/history', async (c) => {
 })
 
 // ============================================================
-// EXPORT TO CSV (supplier + admin)
+// EXPORT TO EXCEL XML (supplier + admin)
+// Generates a proper .xls (Excel XML SpreadsheetML) with formatting
 // ============================================================
 app.get('/export/csv', async (c) => {
   const user = await getAuthUser(c.env.DB, c.req.header('Authorization'))
@@ -510,9 +541,9 @@ app.get('/export/csv', async (c) => {
   const status = c.req.query('status')
   const priority = c.req.query('priority')
 
-  let query = `
-    SELECT r.request_number, r.product_name, r.model, r.quantity,
-           r.status, r.priority, r.comment, r.rejection_reason,
+  // Get requests with filters
+  let reqQuery = `
+    SELECT r.id, r.request_number, r.status, r.priority, r.comment, r.rejection_reason,
            r.created_at, r.updated_at,
            u.full_name as applicant_name, u.email as applicant_email,
            p.name as project_name
@@ -523,49 +554,190 @@ app.get('/export/csv', async (c) => {
   `
   let params: (string | number)[] = []
 
-  if (status && status !== 'all') { query += ' AND r.status = ?'; params.push(status) }
-  if (priority && priority !== 'all') { query += ' AND r.priority = ?'; params.push(priority) }
-  if (project_id && project_id !== 'all') { query += ' AND r.project_id = ?'; params.push(parseInt(project_id)) }
-  if (applicant_id) { query += ' AND r.applicant_id = ?'; params.push(parseInt(applicant_id)) }
-  if (date_from) { query += ' AND r.created_at >= ?'; params.push(date_from) }
-  if (date_to) { query += ' AND r.created_at <= ?'; params.push(date_to + 'T23:59:59') }
+  if (status && status !== 'all') { reqQuery += ' AND r.status = ?'; params.push(status) }
+  if (priority && priority !== 'all') { reqQuery += ' AND r.priority = ?'; params.push(priority) }
+  if (project_id && project_id !== 'all') { reqQuery += ' AND r.project_id = ?'; params.push(parseInt(project_id)) }
+  if (applicant_id) { reqQuery += ' AND r.applicant_id = ?'; params.push(parseInt(applicant_id)) }
+  if (date_from) { reqQuery += ' AND r.created_at >= ?'; params.push(date_from) }
+  if (date_to) { reqQuery += ' AND r.created_at <= ?'; params.push(date_to + 'T23:59:59') }
+  reqQuery += ' ORDER BY r.created_at DESC'
 
-  query += ' ORDER BY r.created_at DESC'
+  const reqResults = await c.env.DB.prepare(reqQuery).bind(...params).all()
+  const requests = reqResults.results as any[]
 
-  const results = await c.env.DB.prepare(query).bind(...params).all()
-  const rows = results.results as any[]
+  if (!requests.length) {
+    return c.json({ error: 'Нет данных для экспорта' }, 404)
+  }
+
+  // Get all items for these requests
+  const requestIds = requests.map(r => r.id)
+  let itemsMap: Record<number, any[]> = {}
+  if (requestIds.length) {
+    const placeholders = requestIds.map(() => '?').join(',')
+    const itemsResult = await c.env.DB.prepare(
+      `SELECT * FROM request_items WHERE request_id IN (${placeholders}) ORDER BY request_id, item_number`
+    ).bind(...requestIds).all()
+    for (const item of (itemsResult.results as any[])) {
+      if (!itemsMap[item.request_id]) itemsMap[item.request_id] = []
+      itemsMap[item.request_id].push(item)
+    }
+  }
 
   const statusLabels: Record<string, string> = { pending: 'На рассмотрении', completed: 'Исполнено', rejected: 'Отклонено' }
   const priorityLabels: Record<string, string> = { low: 'Низкий', medium: 'Средний', high: 'Высокий', urgent: 'Срочный' }
 
-  const escape = (v: any) => {
+  const xmlEsc = (v: any) => {
     if (v == null) return ''
-    const s = String(v).replace(/"/g, '""')
-    return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s}"` : s
+    return String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
   }
 
-  const headers = ['Номер заявки','Товар','Модель','Количество','Статус','Приоритет',
-    'Проект','Заявитель','Email заявителя','Комментарий','Причина отклонения','Дата создания','Дата обновления']
+  const cell = (val: any, style = 'Normal', type = 'String') => {
+    const v = xmlEsc(val)
+    if (type === 'Number') return `<Cell ss:StyleID="${style}"><Data ss:Type="Number">${v}</Data></Cell>`
+    return `<Cell ss:StyleID="${style}"><Data ss:Type="String">${v}</Data></Cell>`
+  }
 
-  const csvRows = [
-    headers.join(','),
-    ...rows.map(r => [
-      r.request_number, r.product_name, r.model, r.quantity,
-      statusLabels[r.status] || r.status,
-      priorityLabels[r.priority] || r.priority,
-      r.project_name || '',
-      r.applicant_name, r.applicant_email,
-      r.comment || '', r.rejection_reason || '',
-      r.created_at, r.updated_at
-    ].map(escape).join(','))
-  ]
+  // Build rows — one row per item (with request info repeated for each item)
+  const dataRows: string[] = []
+  for (const req of requests) {
+    const items = itemsMap[req.id] || [{ item_number: 1, product_name: '—', model: '—', quantity: 0, unit: 'шт.' }]
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]
+      const isFirst = i === 0
+      // Merge-like: show request info only on first item row
+      dataRows.push(`
+        <Row>
+          ${cell(isFirst ? xmlEsc(req.request_number) : '', 'DataLeft')}
+          ${cell(isFirst ? xmlEsc(req.project_name || '—') : '', 'DataLeft')}
+          ${cell(item.item_number, 'DataCenter', 'Number')}
+          ${cell(xmlEsc(item.product_name), 'DataLeft')}
+          ${cell(xmlEsc(item.model), 'DataLeft')}
+          ${cell(item.quantity, 'DataCenter', 'Number')}
+          ${cell(xmlEsc(item.unit || 'шт.'), 'DataCenter')}
+          ${cell(isFirst ? statusLabels[req.status] || req.status : '', 'DataCenter')}
+          ${cell(isFirst ? priorityLabels[req.priority] || req.priority : '', 'DataCenter')}
+          ${cell(isFirst ? xmlEsc(req.applicant_name) : '', 'DataLeft')}
+          ${cell(isFirst ? xmlEsc(req.project_name || '') : '', 'DataLeft')}
+          ${cell(isFirst ? xmlEsc(req.comment || '') : '', 'DataLeft')}
+          ${cell(isFirst ? xmlEsc(req.rejection_reason || '') : '', 'DataLeft')}
+          ${cell(isFirst ? xmlEsc(req.created_at?.slice(0,10) || '') : '', 'DataCenter')}
+        </Row>`)
+    }
+  }
 
-  const csv = '\uFEFF' + csvRows.join('\r\n') // BOM for Excel UTF-8
-  const filename = `tenoil-requests-${new Date().toISOString().slice(0,10)}.csv`
+  const generatedAt = new Date().toLocaleDateString('ru-RU')
+  const xls = `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:x="urn:schemas-microsoft-com:office:excel">
+ <DocumentProperties xmlns="urn:schemas-microsoft-com:office:office">
+  <Title>TenOil — Заявки</Title>
+  <Author>TenOil System</Author>
+  <Created>${new Date().toISOString()}</Created>
+ </DocumentProperties>
+ <Styles>
+  <Style ss:ID="Title">
+   <Font ss:Bold="1" ss:Size="14" ss:Color="#1E3A5F"/>
+   <Alignment ss:Horizontal="Left" ss:Vertical="Center"/>
+  </Style>
+  <Style ss:ID="SubTitle">
+   <Font ss:Size="10" ss:Color="#666666"/>
+   <Alignment ss:Horizontal="Left"/>
+  </Style>
+  <Style ss:ID="Header">
+   <Font ss:Bold="1" ss:Color="#FFFFFF" ss:Size="10"/>
+   <Interior ss:Color="#1E3A8A" ss:Pattern="Solid"/>
+   <Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/>
+   <Borders>
+    <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="2" ss:Color="#FFFFFF"/>
+   </Borders>
+  </Style>
+  <Style ss:ID="DataLeft">
+   <Font ss:Size="10"/>
+   <Alignment ss:Horizontal="Left" ss:Vertical="Top" ss:WrapText="1"/>
+   <Borders>
+    <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E5E7EB"/>
+    <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E5E7EB"/>
+   </Borders>
+  </Style>
+  <Style ss:ID="DataCenter">
+   <Font ss:Size="10"/>
+   <Alignment ss:Horizontal="Center" ss:Vertical="Top"/>
+   <Borders>
+    <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E5E7EB"/>
+    <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#E5E7EB"/>
+   </Borders>
+  </Style>
+  <Style ss:ID="Normal">
+   <Font ss:Size="10"/>
+   <Alignment ss:Horizontal="Left" ss:Vertical="Top"/>
+  </Style>
+ </Styles>
+ <Worksheet ss:Name="Заявки">
+  <Table ss:DefaultRowHeight="20">
+   <Column ss:Width="90"/>
+   <Column ss:Width="60"/>
+   <Column ss:Width="35"/>
+   <Column ss:Width="120"/>
+   <Column ss:Width="100"/>
+   <Column ss:Width="55"/>
+   <Column ss:Width="40"/>
+   <Column ss:Width="90"/>
+   <Column ss:Width="70"/>
+   <Column ss:Width="110"/>
+   <Column ss:Width="60"/>
+   <Column ss:Width="130"/>
+   <Column ss:Width="130"/>
+   <Column ss:Width="80"/>
+   <Row ss:Height="30">
+    <Cell ss:StyleID="Title" ss:MergeAcross="13">
+     <Data ss:Type="String">TenOil — Реестр заявок (${xmlEsc(generatedAt)})</Data>
+    </Cell>
+   </Row>
+   <Row ss:Height="16">
+    <Cell ss:StyleID="SubTitle" ss:MergeAcross="13">
+     <Data ss:Type="String">Сформировано: ${xmlEsc(new Date().toLocaleString('ru-RU'))} | Строк: ${requests.length} заявок</Data>
+    </Cell>
+   </Row>
+   <Row ss:Height="14"><Cell ss:MergeAcross="13"><Data ss:Type="String"></Data></Cell></Row>
+   <Row ss:Height="32">
+    ${cell('Номер заявки','Header')}
+    ${cell('Проект','Header')}
+    ${cell('№','Header')}
+    ${cell('Наименование товара','Header')}
+    ${cell('Модель','Header')}
+    ${cell('Кол-во','Header')}
+    ${cell('Ед.','Header')}
+    ${cell('Статус','Header')}
+    ${cell('Приоритет','Header')}
+    ${cell('Заявитель','Header')}
+    ${cell('Email','Header')}
+    ${cell('Комментарий','Header')}
+    ${cell('Причина отклонения','Header')}
+    ${cell('Дата','Header')}
+   </Row>
+   ${dataRows.join('\n')}
+  </Table>
+  <WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel">
+   <FreezePanes/>
+   <FrozenNoSplit/>
+   <SplitHorizontal>4</SplitHorizontal>
+   <TopRowBottomPane>4</TopRowBottomPane>
+   <ActivePane>2</ActivePane>
+   <Print>
+    <FitWidth>1</FitWidth>
+    <Orientation>Landscape</Orientation>
+    <PaperSizeIndex>9</PaperSizeIndex>
+   </Print>
+  </WorksheetOptions>
+ </Worksheet>
+</Workbook>`
 
-  return new Response(csv, {
+  const filename = `tenoil-requests-${new Date().toISOString().slice(0,10)}.xls`
+  return new Response(xls, {
     headers: {
-      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Type': 'application/vnd.ms-excel; charset=utf-8',
       'Content-Disposition': `attachment; filename="${filename}"`
     }
   })
